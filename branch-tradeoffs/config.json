@@ -1,0 +1,15 @@
+{
+  "model": {
+    "provider": "auto",
+    "id": "auto"
+  },
+  "analysis": {
+    "maxCommits": 100,
+    "maxDiffFiles": 30,
+    "maxDiffBytes": 50000,
+    "includeDiffPatterns": ["*.ts", "*.tsx", "*.js", "*.jsx", "*.py", "*.go", "*.rs", "*.java", "*.kt", "*.swift", "*.c", "*.cpp", "*.h", "*.rb", "*.ex", "*.exs"],
+    "excludeDiffPatterns": ["*.lock", "*.generated.*", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "*.min.js", "*.min.css", "*.map"],
+    "focusAreas": [],
+    "baseBranchCandidates": ["main", "master", "develop", "dev", "trunk"]
+  }
+}

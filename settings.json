@@ -1,0 +1,7 @@
+{
+  "lastChangelogVersion": "0.67.2",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "gpt-4o",
+  "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false
+}
