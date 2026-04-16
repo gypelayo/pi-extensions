@@ -222,10 +222,9 @@ export default function (pi: ExtensionAPI) {
 			render() {
 				const lines: string[] = [];
 				const BAR_WIDTH = 18;
-				const PCT_SLOT = 4; // padStart(4): " 0%" … "100%"
-				const COMPACT_LABEL = " COMPACT "; // 9 chars
-				const EFFORT_LABEL  = " EFFORT  "; // 9 chars — must match COMPACT_LABEL length
-				const BAR_PREFIX_LEN = 1 + BAR_WIDTH + 1 + COMPACT_LABEL.length; // 29
+				const PCT_SLOT = 4;
+				const COMPACT_LABEL = " COMPACT ";
+				const BAR_PREFIX_LEN = 1 + BAR_WIDTH + 1 + COMPACT_LABEL.length;
 
 				// Row 1: req/month
 				if (monthlyRequests > 0) {
@@ -264,25 +263,6 @@ export default function (pi: ExtensionAPI) {
 						lines.push(bar + theme.fg("dim", COMPACT_LABEL) + theme.fg(barColor, pctStr));
 					}
 				}
-
-				// Row 3: EFFORT bar — uses ctx.model from outer closure (not _tui)
-				const modelId = ctx.model?.id || "";
-				const mult = getCopilotMultiplier(modelId);
-				const effortPct = Math.min(100, Math.max(0, mult * 100 / 3));
-				const filledEffort = Math.round((effortPct / 100) * BAR_WIDTH);
-				const effortColor = mult === 0 ? "success" : mult < 1 ? "warning" : "error";
-				const effortBar =
-					theme.fg("dim", "[") +
-					theme.fg(effortColor, "█".repeat(filledEffort)) +
-					theme.fg("dim", "░".repeat(BAR_WIDTH - filledEffort)) +
-					theme.fg("dim", "]");
-				const effortStr = `${effortPct.toFixed(0)}%`.padStart(PCT_SLOT);
-				lines.push(
-					effortBar +
-					theme.fg("dim", EFFORT_LABEL) +
-					theme.fg(effortColor, effortStr) +
-					theme.fg("dim", `  ${modelId} [${mult}]`)
-				);
 
 				return lines;
 			},

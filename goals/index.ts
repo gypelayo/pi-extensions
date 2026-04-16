@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,13 +7,17 @@ import { isInTmux, TmuxPane } from "../shared/tmux-pane";
 
 const extDir = dirname(fileURLToPath(import.meta.url));
 
+// Marker the model embeds in its response text:
+//   <!--GOALS goal="..." steps='[{"text":"...","done":false}]' -->
+const GOALS_RE = /<!--GOALS goal="((?:[^"\\]|\\.)*)" steps='(\[.*?\])'\s*-->/s;
+
 interface Step { text: string; done: boolean }
 interface GoalsData { goal: string; steps: Step[] }
 
 export default function (pi: ExtensionAPI) {
-	// All state inside closure — safe across hot reloads
 	let goalsData: GoalsData = { goal: "", steps: [] };
 	let tmpDir: string | null = null;
+	let pendingExtract = false;   // set by /goals — inject extraction request on next turn (kept for manual /goals trigger)
 	const pane = new TmuxPane(pi);
 
 	async function ensureTmpDir(): Promise<string> {
@@ -33,70 +36,80 @@ export default function (pi: ExtensionAPI) {
 		const viewerPath = join(extDir, "goals-viewer.mjs");
 		const filePath = join(dir, "goals.json");
 		await pane.open(`node '${viewerPath}' '${filePath}'`, 35);
-		// Emit pane ID so other extensions can split relative to it
 		if (pane.id) pi.events.emit("goals:pane", { paneId: pane.id });
 	}
 
-	// Register set_goals tool
-	pi.registerTool({
-		name: "set_goals",
-		label: "Set Goals",
-		description: "Update the goals sidebar with the current objective and steps. Call this when the user states a goal, when you break it into steps, or when you complete a step.",
-		promptSnippet: "Update the goals sidebar with current objective and progress",
-		promptGuidelines: [
-			"When the user gives you a task or goal, call set_goals to set the goal and break it into steps.",
-			"After completing a step, call set_goals to mark it done.",
-			"When the plan changes or new steps emerge, call set_goals to reflect the current state.",
-			"Keep step descriptions short and concrete.",
-			"Do not call set_goals for trivial one-shot questions that don't need tracking.",
-			"When making function calls using tools that accept array or object parameters ensure those are structured using JSON.",
-		],
-		parameters: Type.Object({
-			goal: Type.String({ description: "The current high-level goal or objective" }),
-			steps: Type.Array(
-				Type.Object({
-					text: Type.String({ description: "Short description of this step" }),
-					done: Type.Boolean({ description: "Whether this step is completed" }),
-				}),
-				{ description: "Ordered list of steps to achieve the goal" },
-			),
-		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			goalsData = { goal: params.goal, steps: params.steps };
-			await writeGoals();
-
-			if (await isInTmux(pi)) {
-				await ensurePane();
-			}
-
-			const done = params.steps.filter(s => s.done).length;
-			const total = params.steps.length;
-			return {
-				content: [{ type: "text", text: `${done}/${total} steps done` }],
-				details: { goal: params.goal, steps: params.steps },
-			};
-		},
-	});
-
-	// Goal state injection — use message for higher model attention
-	pi.on("before_agent_start", async (event) => {
-		if (!goalsData.goal) {
-			return;
+	function parseGoalsMarker(text: string): GoalsData | null {
+		const m = GOALS_RE.exec(text);
+		if (!m) return null;
+		try {
+			const goal = m[1].replace(/\\"/g, '"');
+			const steps: Step[] = JSON.parse(m[2]);
+			return { goal, steps };
+		} catch {
+			return null;
 		}
+	}
+
+	function scanHistoryForGoals(ctx: Parameters<Parameters<typeof pi.on>[1]>[1]): GoalsData | null {
+		let latest: GoalsData | null = null;
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				for (const block of entry.message.content) {
+					if (block.type === "text") {
+						const parsed = parseGoalsMarker(block.text);
+						if (parsed) latest = parsed;
+					}
+				}
+			}
+			if (entry.type === "custom" && entry.customType === "goals-state" && entry.data?.goal) {
+				latest = { goal: entry.data.goal, steps: entry.data.steps || [] };
+			}
+		}
+		return latest;
+	}
+
+	// On every turn: inject current goals state + extraction request if /goals was called
+	pi.on("before_agent_start", async (_event) => {
 		const pending = goalsData.steps.filter(s => !s.done).map(s => s.text);
 		const done = goalsData.steps.filter(s => s.done).map(s => s.text);
+		const summary = goalsData.goal
+			? `Current goal: "${goalsData.goal}"\nDone: ${done.join(", ") || "none"}\nPending: ${pending.join(", ") || "none"}`
+			: "No goal set yet.";
+
+		let content = `[GOALS STATE]\n${summary}`;
+
+		if (pendingExtract) {
+			pendingExtract = false;
+			content +=
+				"\n\n[GOALS EXTRACTION REQUESTED]\n" +
+				"Based on this conversation, identify the current goal and steps. " +
+				"Include this marker anywhere in your response (it will not be displayed):\n" +
+				"  <!--GOALS goal=\"<goal>\" steps='[{\"text\":\"step\",\"done\":false}]' -->\n" +
+				"Use done:true for completed steps. If no clear goal exists, use goal=\"\" and steps=[].";
+		}
+
 		return {
 			message: {
 				customType: "goals-state",
-				content: `Current goal: "${goalsData.goal}"\nDone: ${done.join(", ") || "none"}\nPending: ${pending.join(", ") || "none"}\nCall set_goals after completing steps or when the plan changes.`,
+				content,
 				display: false,
 			},
 		};
 	});
 
-	// /goal command — also stores via appendEntry for manual goals
-	pi.registerCommand("goal", {
-		description: "Toggle goals pane, or set goal: /goal <description>",
+	// After each turn: parse marker from response and update sidebar
+	pi.on("turn_end", async (_event, ctx) => {
+		const found = scanHistoryForGoals(ctx);
+		if (found && (found.goal !== goalsData.goal || JSON.stringify(found.steps) !== JSON.stringify(goalsData.steps))) {
+			goalsData = found;
+			await writeGoals();
+		}
+	});
+
+	// /goals — request extraction on next turn (zero extra requests)
+	pi.registerCommand("goals", {
+		description: "Extract goals from conversation on next request. /goals <text> to set manually.",
 		handler: async (args, ctx) => {
 			if (!(await isInTmux(pi))) {
 				ctx.ui.notify("Not inside tmux.", "error");
@@ -105,65 +118,40 @@ export default function (pi: ExtensionAPI) {
 
 			const text = (args || "").trim();
 
-			if (!text) {
-				if (await pane.isAlive()) {
-					await pane.close();
-				} else {
-					await writeGoals();
-					await ensurePane();
-				}
+			if (text) {
+				// Manual override
+				goalsData = { goal: text, steps: [] };
+				pi.appendEntry("goals-state", goalsData);
+				await writeGoals();
+				await ensurePane();
+				ctx.ui.notify(`Goal set: ${text}`, "info");
 				return;
 			}
 
-			// Manual goal set — persist via appendEntry
-			goalsData = { goal: text, steps: [] };
-			pi.appendEntry("goals-state", goalsData);
-			await writeGoals();
+			// Flag extraction for next turn
+			pendingExtract = true;
 			await ensurePane();
-			ctx.ui.notify(`Goal: ${text}`, "info");
+			ctx.ui.notify("Goals will be extracted on your next message.", "info");
 		},
 	});
 
-	// Restore goals + auto-open pane
+	// Session start — always open pane
 	pi.on("session_start", async (event, ctx) => {
 		goalsData = { goal: "", steps: [] };
-
-		// Restore from session: check tool results first, then manual entries
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type === "message"
-				&& entry.message.role === "toolResult"
-				&& entry.message.toolName === "set_goals"
-				&& entry.message.details?.goal) {
-				goalsData = {
-					goal: entry.message.details.goal,
-					steps: entry.message.details.steps || [],
-				};
-			}
-			if (entry.type === "custom" && entry.customType === "goals-state" && entry.data?.goal) {
-				goalsData = {
-					goal: entry.data.goal,
-					steps: entry.data.steps || [],
-				};
-			}
-		}
+		const found = scanHistoryForGoals(ctx);
+		if (found) goalsData = found;
 
 		if (await isInTmux(pi)) {
 			await writeGoals();
-			// Defer pane opening — wait for splash to finish if it's active
-			// Check if this is a fresh session (splash shows) or a resume (no splash)
+			const open = async () => { await writeGoals(); await ensurePane(); };
 			if (event.reason === "resume" || event.reason === "fork" || event.reason === "reload") {
-				await ensurePane();
+				await open();
 			} else {
-				// Fresh session: wait for splash:done event before opening pane
-				pi.events.on("splash:done", async () => {
-					await writeGoals();
-					await ensurePane();
-				});
+				pi.events.on("splash:done", open);
 			}
 		}
 	});
 
-	// Cleanup
 	pi.on("session_shutdown", async () => {
 		await pane.close();
 		if (tmpDir) {

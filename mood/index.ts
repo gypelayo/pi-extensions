@@ -7,7 +7,7 @@ import { isInTmux } from "../shared/tmux-pane";
 
 const extDir = dirname(fileURLToPath(import.meta.url));
 
-type Mood = "idle" | "thinking" | "working" | "success" | "error" | "surprised" | "reading";
+type Mood = "idle" | "thinking" | "working";
 
 export default function (pi: ExtensionAPI) {
 	let tmpDir: string | null = null;
@@ -74,47 +74,22 @@ export default function (pi: ExtensionAPI) {
 		goalsPaneId = data?.paneId || null;
 	});
 
-	// --- Events that change mood ---
-
-	pi.on("agent_end", async () => {
-		await setMood("idle");
-	});
+	// --- Mood: thinking → working → thinking → idle ---
 
 	pi.on("agent_start", async () => {
 		await setMood("thinking");
 	});
 
-	pi.on("tool_execution_start", async (event) => {
-		if (event.toolName === "read") {
-			await setMood("reading", event.args?.path);
-		} else if (event.toolName === "set_goals") {
-			// Skip meta tools
-		} else if (event.toolName === "bash") {
-			await setMood("working");
-		} else {
-			await setMood("working");
-		}
+	pi.on("tool_execution_start", async () => {
+		await setMood("working");
 	});
 
-	pi.on("tool_execution_end", async (event) => {
-		if (event.toolName === "set_goals") return;
-		if (event.isError) {
-			await setMood("error");
-		} else {
-			await setMood("success");
-		}
-	});
-
-	pi.on("tool_result", async (event) => {
-		if (event.toolName !== "bash") return;
-		const details = event.details as any;
-		if (details?.exitCode && details.exitCode !== 0) {
-			await setMood("surprised");
-		}
-	});
-
-	pi.on("turn_start", async () => {
+	pi.on("tool_execution_end", async () => {
 		await setMood("thinking");
+	});
+
+	pi.on("agent_end", async () => {
+		await setMood("idle");
 	});
 
 	// --- Pane management ---
