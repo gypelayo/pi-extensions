@@ -47,6 +47,58 @@ function formatTokens(n: number): string {
 
 // ─── Monthly usage scanner ───────────────────────────────────────────
 
+// Copilot billing multipliers for paid plans (April 2024, from official docs)
+const COPILOT_PAID_REQUEST_MULTIPLIER: Record<string, number> = {
+  // Claude
+  "claude haiku 4.5": 0.33,
+  "claude-opus-4.5": 3,
+  "claude opus 4.5": 3,
+  "claude-opus-4.6": 3,
+  "claude opus 4.6": 3,
+  "claude-opus-4.6-fast": 30,
+  "claude opus 4.6 (fast mode) (preview)": 30,
+  "claude-sonnet-4": 1,
+  "claude sonnet 4": 1,
+  "claude-sonnet-4.5": 1,
+  "claude sonnet 4.5": 1,
+  "claude-sonnet-4.6": 1,
+  "claude sonnet 4.6": 1,
+  // Gemini
+  "gemini-2.5-pro": 1,
+  "gemini 2.5 pro": 1,
+  "gemini-3-flash": 0.33,
+  "gemini 3 flash": 0.33,
+  "gemini-3.1-pro": 1,
+  "gemini 3.1 pro": 1,
+  // GPT family
+  "gpt-4.1": 0,
+  "gpt 4 1": 0,
+  "gpt-4o": 0,
+  "gpt-5 mini": 0,
+  "gpt-5.2": 1,
+  "gpt-5.2-codex": 1,
+  "gpt-5.3-codex": 1,
+  "gpt-5.4": 1,
+  "gpt-5.4 mini": 0.33,
+  // Grok
+  "grok code fast 1": 0.25,
+  // Raptor/Goldeneye
+  "raptor mini": 0,
+  // (Goldeneye: Not Yet Billable)
+};
+function getCopilotMultiplier(model: string|undefined|null): number {
+  if (!model) return 1;
+  model = model.toLowerCase().replace(/[_.-]+/g, " ").replace(/\s+/g, " ").trim();
+  for (const key of Object.keys(COPILOT_PAID_REQUEST_MULTIPLIER)) {
+    if (model === key) return COPILOT_PAID_REQUEST_MULTIPLIER[key];
+    // Fuzzy
+    if (model.includes(key)) return COPILOT_PAID_REQUEST_MULTIPLIER[key];
+    if (key.includes(model)) return COPILOT_PAID_REQUEST_MULTIPLIER[key];
+  }
+  // fallback: treat unlisted models as 1
+  return 1;
+}
+
 async function scanMonthlyUsage(provider: string): Promise<{ requests: number }> {
 	const currentMonth = new Date().toISOString().slice(0, 7);
 	const sessionsBase = join(homedir(), ".pi", "agent", "sessions");
@@ -69,7 +121,10 @@ async function scanMonthlyUsage(provider: string): Promise<{ requests: number }>
 							const entry = JSON.parse(line);
 							if (entry.type !== "message") continue;
 							const msg = entry.message;
-							if (msg?.role === "assistant" && msg?.provider === provider) requests++;
+							if (msg?.role === "assistant" && msg?.provider === provider) {
+  const mult = getCopilotMultiplier(msg.model || msg.modelId || "");
+  requests += mult;
+}
 						} catch {}
 					}
 				} catch {}
@@ -166,15 +221,32 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget("token-usage", (_tui, theme) => ({
 			render() {
 				const lines: string[] = [];
-				// Bar line visible prefix: "[" + 18 bar + "]" + " COMPACT " = 29 chars (all ASCII)
-				const COMPACT_LABEL = " COMPACT ";
 				const BAR_WIDTH = 18;
+				const PCT_SLOT = 4; // padStart(4): " 0%" … "100%"
+				const COMPACT_LABEL = " COMPACT "; // 9 chars
+				const EFFORT_LABEL  = " EFFORT  "; // 9 chars — must match COMPACT_LABEL length
 				const BAR_PREFIX_LEN = 1 + BAR_WIDTH + 1 + COMPACT_LABEL.length; // 29
 
-				// Both pct strings are padStart(4) so "%" always lands at the same column
-				const PCT_SLOT = 4; // fits "100%" or "404%"
+				// Row 1: req/month
+				if (monthlyRequests > 0) {
+					const pct = (monthlyRequests / MONTHLY_ALLOWANCE) * 100;
+					const pctColor = pct > 100 ? "error" : pct > 80 ? "warning" : "success";
+					const pctStr = `${pct.toFixed(0)}%`.padStart(PCT_SLOT);
+					const reqNum = String(sessionRequests || 0);
+					const fixedLeft = "req ";
+					const fixedRight = "  .  month ";
+					const prefixLen = fixedLeft.length + reqNum.length + fixedRight.length;
+					const pad = " ".repeat(Math.max(0, BAR_PREFIX_LEN - prefixLen));
+					lines.push(
+						theme.fg("dim", fixedLeft) +
+						theme.fg("accent", reqNum) +
+						theme.fg("dim", fixedRight) +
+						pad +
+						theme.fg(pctColor, pctStr)
+					);
+				}
 
-				// Row 2: bar + COMPACT pct
+				// Row 2: COMPACT bar
 				if (contextTokens !== null && contextWindow !== null) {
 					const compactAt = contextWindow * (70 / 100);
 					const barPct = Math.min(100, (contextTokens / compactAt) * 100);
@@ -193,25 +265,24 @@ export default function (pi: ExtensionAPI) {
 					}
 				}
 
-				// Row 1: prefix padded so pctStr ends at same column as bar line
-				// Total line width = BAR_PREFIX_LEN + PCT_SLOT
-				if (monthlyRequests > 0) {
-					const pct = (monthlyRequests / MONTHLY_ALLOWANCE) * 100;
-					const pctColor = pct > 100 ? "error" : pct > 80 ? "warning" : "success";
-					const pctStr = `${pct.toFixed(0)}%`.padStart(PCT_SLOT);
-					const reqNum = String(sessionRequests || 0);
-					const fixedLeft = "req ";
-					const fixedRight = "  .  month ";
-					const prefixLen = fixedLeft.length + reqNum.length + fixedRight.length;
-					const pad = " ".repeat(Math.max(0, BAR_PREFIX_LEN - prefixLen));
-					const line =
-						theme.fg("dim", fixedLeft) +
-						theme.fg("accent", reqNum) +
-						theme.fg("dim", fixedRight) +
-						pad +
-						theme.fg(pctColor, pctStr);
-					lines.unshift(line);
-				}
+				// Row 3: EFFORT bar — uses ctx.model from outer closure (not _tui)
+				const modelId = ctx.model?.id || "";
+				const mult = getCopilotMultiplier(modelId);
+				const effortPct = Math.min(100, Math.max(0, mult * 100 / 3));
+				const filledEffort = Math.round((effortPct / 100) * BAR_WIDTH);
+				const effortColor = mult === 0 ? "success" : mult < 1 ? "warning" : "error";
+				const effortBar =
+					theme.fg("dim", "[") +
+					theme.fg(effortColor, "█".repeat(filledEffort)) +
+					theme.fg("dim", "░".repeat(BAR_WIDTH - filledEffort)) +
+					theme.fg("dim", "]");
+				const effortStr = `${effortPct.toFixed(0)}%`.padStart(PCT_SLOT);
+				lines.push(
+					effortBar +
+					theme.fg("dim", EFFORT_LABEL) +
+					theme.fg(effortColor, effortStr) +
+					theme.fg("dim", `  ${modelId} [${mult}]`)
+				);
 
 				return lines;
 			},
