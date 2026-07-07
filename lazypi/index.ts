@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Context window usage
 	let contextPct: number | null = null;
-	let contextTokens: number | null = null;
+	let contextTokens: number | null = null; // kept for potential future use
 	let contextWindow: number | null = null;
 
 	// Monthly usage
@@ -223,8 +223,7 @@ export default function (pi: ExtensionAPI) {
 				const lines: string[] = [];
 				const BAR_WIDTH = 18;
 				const PCT_SLOT = 4;
-				const COMPACT_LABEL = " COMPACT ";
-				const BAR_PREFIX_LEN = 1 + BAR_WIDTH + 1 + COMPACT_LABEL.length;
+				const BAR_PREFIX_LEN = 20;
 
 				// Row 1: req/month
 				if (monthlyRequests > 0) {
@@ -243,25 +242,6 @@ export default function (pi: ExtensionAPI) {
 						pad +
 						theme.fg(pctColor, pctStr)
 					);
-				}
-
-				// Row 2: COMPACT bar
-				if (contextTokens !== null && contextWindow !== null) {
-					const compactAt = contextWindow * (70 / 100);
-					const barPct = Math.min(100, (contextTokens / compactAt) * 100);
-					const filled = Math.max(barPct > 0 ? 1 : 0, Math.round((barPct / 100) * BAR_WIDTH));
-					const barColor = barPct >= 100 ? "error" : barPct > 75 ? "warning" : "success";
-					const bar =
-						theme.fg("dim", "[") +
-						theme.fg(barColor, "█".repeat(filled)) +
-						theme.fg("dim", "░".repeat(BAR_WIDTH - filled)) +
-						theme.fg("dim", "]");
-					if (barPct >= 100) {
-						lines.push(bar + theme.fg("error", `${COMPACT_LABEL}⚠`));
-					} else {
-						const pctStr = `${barPct.toFixed(0)}%`.padStart(PCT_SLOT);
-						lines.push(bar + theme.fg("dim", COMPACT_LABEL) + theme.fg(barColor, pctStr));
-					}
 				}
 
 				return lines;

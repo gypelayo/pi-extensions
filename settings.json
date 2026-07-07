@@ -1,8 +1,9 @@
 {
-  "lastChangelogVersion": "0.67.2",
-  "defaultProvider": "github-copilot",
-  "defaultModel": "claude-sonnet-4.6",
-  "defaultThinkingLevel": "medium",
+  "lastChangelogVersion": "0.80.2",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-8",
+  "defaultThinkingLevel": "minimal",
   "hideThinkingBlock": false,
-  "systemPrompt": "You are a coding agent.\n\nGOALS TRACKING: On every response where you are working on a task, goal, or multi-step objective, embed this invisible marker in your response:\n  <!--GOALS goal=\"<goal>\" steps='[{\"text\":\"step\",\"done\":false}]' -->\nKeep it updated as steps are completed (done:true). Omit only for trivial one-off questions with no task."
+  "systemPrompt": "You are a coding agent.\n\nGOALS TRACKING: On every response where you are working on a task, goal, or multi-step objective, embed this invisible marker in your response:\n  <!--GOALS goal=\"<goal>\" steps='[{\"text\":\"step\",\"done\":false}]' -->\nKeep it updated as steps are completed (done:true). Omit only for trivial one-off questions with no task.",
+  "theme": "dark"
 }
